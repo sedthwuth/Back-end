@@ -52,32 +52,52 @@ app.get('/users/:id', async (req, res, next) => {
     next(err);
   }
 });
-
 //POST: เพิ่มผู้ใช้ใหม่ พร้อม hash password
 app.post('/users', async (req, res) => {
   const { firstname, fullname, lastname, username, password, status } = req.body;
+
   try {
-    const [result] = await db.query('INSERT INTO tbl_users (firstname, fullname, lastname, username, password, status ) VALUES (?, ?, ?, ?, ?, ?)',
-     [firstname, fullname, lastname,username, password, status]);
+    if (!password) return res.status(400).json({ error: 'Password is required' });
+
+    // เข้ารหัส password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const [result] = await db.query(
+      'INSERT INTO tbl_users (firstname, fullname, lastname, username, hashedpassword, status) VALUES (?, ?, ?, ?, ?, ?)',
+      [firstname, fullname, lastname, username,  hashedPassword, status]
+    );
+
     res.json({ id: result.insertId, firstname, fullname, lastname, username, password, status });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Insert failed' });
   }
 });
-//PUT /users/:id - แก้ไขข้อมูลผู้ใช้
+// PUT: อัปเดตข้อมูลผู้ใช้ + เปลี่ยนรหัสผ่านถ้ามีส่งมา
 app.put('/users/:id', async (req, res) => {
   const { id } = req.params;
   const { firstname, fullname, lastname, username, password, status } = req.body;
- 
+
   try {
-    const [result] = await db.query(
-      'UPDATE tbl_users SET firstname = ?, fullname = ?, lastname = ?, username = ?, password = ?, status = ?, WHERE id = ?',
-      [firstname, fullname, lastname, username, password, status,id]
-    );
+    let query = 'UPDATE tbl_users SET firstname = ?, fullname = ?, lastname = ? username = ?, passwrod = ?, status = ?';
+    const params = [firstname, fullname, lastname,username, password, status ];
+
+    // ถ้ามี password ใหม่ให้ hash แล้วอัปเดตด้วย
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      query += ', password = ?';
+      params.push(hashedPassword);
+    }
+
+    query += ' WHERE id = ?';
+    params.push(id);
+
+    const [result] = await db.query(query, params);
+
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
     res.json({ message: 'User updated successfully' });
   } catch (err) {
     console.error(err);
