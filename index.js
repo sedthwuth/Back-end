@@ -1,21 +1,18 @@
-// server.js
-
-// 1. IMPORTS (โหลด Library และ Config ต่างๆ ไว้บนสุด)
 require('dotenv').config({ path: './.env' });
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const verifyToken = require('./middleware/auth'); // ต้องมั่นใจว่าไฟล์นี้มีอยู่จริง
-
+const verifyToken = require('./middleware/auth.js'); 
+const cors = require('cors'); 
 const app = express();
-app.use(express.json());
 
-// 2. CONFIGURATION (ตั้งค่าตัวแปรระบบ)
 const SECRET_KEY = process.env.JWT_SECRET;
-const PORT = process.env.PORT || 3000;
 
-// 3. DATABASE CONNECTION
+app.use(express.json());
+app.use(cors()); // สำหรับแก้ปัญหา "Cannot find module 'cors'" ให้รัน npm install อีกครั้ง
+
+// เชื่อมต่อฐานข้อมูล
 const db = mysql.createPool({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
@@ -24,225 +21,210 @@ const db = mysql.createPool({
     database: process.env.DB_NAME,
 });
 
-// ================= ROUTES (เส้นทางต่างๆ) =================
-
-// Route 1: ทดสอบการเชื่อมต่อ
-app.get('/ping', async (req, res) => {
-    try {
-        const [rows] = await db.query('SELECT NOW() AS now');
-        res.json({ status: 'ok', time: rows[0].now });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
+app.get('/', (req, res) => {
+    res.status(200).json({ message: 'Welcome to Food Delivery API (Full CRUD)' });
 });
 
-// Route 2: ดึงข้อมูลผู้ใช้ทั้งหมด (Public)
-app.get('/users', async (req, res) => {
-    try {
-        const [rows] = await db.query('SELECT * FROM tbl_users');
-        res.json(rows);
-    } catch (err) {
-        console.error("GET /users failed:", err);
-        res.status(500).json({ error: 'Query failed' });
-    }
-});
+// ==========================================
+// 1. REGISTER (AUTH) - แก้ไข ReferenceError: username is not defined และ SQL Typo
+// ==========================================
+app.post('/auth/register', async (req, res) => {
+    // 🚨 แก้ไข: ดึงตัวแปรทั้งหมดจาก req.body
+    const { username, password, first_name, last_name, address, phone, email } = req.body; 
 
-// Route 3: ดึงข้อมูลผู้ใช้ตาม ID (Public)
-app.get('/users/:id', async (req, res, next) => {
-    const { id } = req.params;
-    try {
-        const [rows] = await db.query('SELECT * FROM tbl_users WHERE id = ?', [id]);
-        if (rows.length === 0) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.json(rows[0]);
-    } catch (err) {
-        next(err);
-    }
-});
+    // 1. ตรวจสอบว่ามีข้อมูลครบไหม (ถ้ามี)
 
-// Route 4: สมัครสมาชิก (Register)
-app.post('/users', async (req, res) => {
-    const { firstname, fullname, lastname, username, password, status } = req.body;
     try {
-        if (!password) return res.status(400).json({ error: 'Password is required' });
-
-        // ตรวจสอบ Username ซ้ำก่อน
-        const [existing] = await db.query('SELECT id FROM tbl_users WHERE username = ?', [username]);
-        if (existing.length > 0) {
+        const [existingUser] = await db.query('SELECT username FROM tbl_customers WHERE username = ?', [username]);
+        if (existingUser.length > 0) {
             return res.status(409).json({ error: 'Username already exists' });
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-
+        
+        // ✅ แก้ไข: SQL Query ใช้ first_name และ last_name ที่มี underscore
         const [result] = await db.query(
-            'INSERT INTO tbl_users (firstname, fullname, lastname, username, password, status) VALUES (?, ?, ?, ?, ?, ?)',
-            [firstname, fullname, lastname, username, hashedPassword, status]
+            'INSERT INTO tbl_customers (username, password, first_name, last_name, address, phone, email) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [username, hashedPassword, first_name, last_name, address, phone, email]
         );
 
-        res.status(201).json({ id: result.insertId, firstname, fullname, lastname, username, status });
+        res.status(201).json({ message: 'Register successful' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Insert failed' });
+        res.status(500).json({ error: 'Register failed' });
     }
 });
 
-// Route 5: เข้าสู่ระบบ (Login)
-app.post('/login', async (req, res) => {
+// ==========================================
+// 2. LOGIN (AUTH)
+// ==========================================
+app.post('/auth/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const [rows] = await db.query('SELECT * FROM tbl_users WHERE username = ?', [username]);
+        const [rows] = await db.query('SELECT * FROM tbl_customers WHERE username = ?', [username]);
         if (rows.length === 0) return res.status(401).json({ error: 'User not found' });
-
+    
         const user = rows[0];
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ error: 'Invalid password' });
-
+    
         const token = jwt.sign(
-            { id: user.id, fullname: user.fullname, lastname: user.lastname, username: user.username },
+            { id: user.customer_id, username: user.username }, 
             SECRET_KEY,
-            { expiresIn: '1h' }
+            { expiresIn: '24h' }
         );
-
-        // ส่งข้อมูลผู้ใช้ที่ไม่รวม Password กลับไปด้วย
-        const { password: _, ...userInfo } = user;
-        res.json({ message: 'Login successful', token, user: userInfo });
+        res.json({ message: 'Login successful', token });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Login failed' });
     }
 });
 
-// Route 6: แก้ไขข้อมูล (Update)
-app.put('/users/:id', async (req, res) => {
-    const { id } = req.params;
-    const { firstname, fullname, lastname, username, password, status } = req.body;
+// Route 3: GET /customers (READ ALL)
+app.get('/customers', verifyToken, async (req, res) => {
     try {
-        let updateData = { firstname, fullname, lastname, username, status };
-        let sql = 'UPDATE tbl_users SET firstname = ?, fullname = ?, lastname = ?, username = ?, status = ?';
-        let values = [firstname, fullname, lastname, username, status];
+        const [rows] = await db.query('SELECT customer_id, username, first_name, last_name, email, phone, address FROM tbl_customers');
+        res.json(rows);
+    } catch (err) {
+        console.error(err); 
+        res.status(500).json({ error: 'Database error' }); 
+    } 
+});
 
-        if (password) {
-            const hashedPassword = await bcrypt.hash(password, 10);
-            sql += ', password = ?';
-            values.push(hashedPassword);
-        }
+// Route 4: UPDATE PROFILE (UPDATE)
+app.put('/customers/me', verifyToken, async (req, res) => {
+    const { first_name, last_name, address, phone, email } = req.body;
+    const customer_id = req.user.id; 
 
-        sql += ' WHERE id = ?';
-        values.push(id);
+    try {
+        const [result] = await db.query(
+            'UPDATE tbl_customers SET first_name=?, last_name=?, address=?, phone=?, email=? WHERE customer_id=?',
+            [first_name, last_name, address, phone, email, customer_id]
+        );
 
-        const [result] = await db.query(sql, values);
+        if (result.affectedRows === 0) return res.status(404).json({ error: 'User not found' });
 
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.json({ message: 'User updated successfully' });
+        res.json({ message: 'Profile updated successfully' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Update failed' });
     }
 });
 
-// Route 7: ลบผู้ใช้ (Delete)
-app.delete('/users/:id', async (req, res) => {
-    const { id } = req.params;
+// ==========================================
+// 5. GET MENUS (READ JOIN) - แก้ไข Logic SQL
+// ==========================================
+app.get('/menus', async (req, res) => {
     try {
-        const [result] = await db.query('DELETE FROM tbl_users WHERE id = ?', [id]);
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'User not found' });
+        const sql = `
+            SELECT m.*, r.name AS res_name, r.phone AS res_phone 
+            FROM tbl_menus m
+            -- ✅ แก้ไข: Logic Join ด้วย restaurant_id ทั้งสองฝั่ง
+            JOIN tbl_restaurants r ON m.restaurant_id = r.restaurant_id
+        `;
+        const [rows] = await db.query(sql);
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// ==========================================
+// 6. CREATE ORDER (CREATE)
+// ==========================================
+app.post('/orders', verifyToken, async (req, res) => {
+    const { restaurant_id, menu_id, quantity } = req.body; 
+    const customer_id = req.user.id; 
+
+    if (!menu_id || !quantity || !restaurant_id) {
+        return res.status(400).json({ error: 'Missing required order details (menu_id, quantity, restaurant_id)' });
+    }
+
+    try {
+        const [menuRows] = await db.query('SELECT price FROM tbl_menus WHERE menu_id = ?', [menu_id]);
+        if (menuRows.length === 0) return res.status(404).json({ error: 'Menu not found' });
+
+        const price = parseFloat(menuRows[0].price);
+        const total_price = price * quantity; 
+
+        const [result] = await db.query(
+            'INSERT INTO tbl_orders (customer_id, restaurant_id, menu_id, quantity, total_price, status, order_date) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+            [customer_id, restaurant_id, menu_id, quantity, total_price, 'Pending']
+        );
+
+        res.status(201).json({ 
+            message: 'Order placed', 
+            order_id: result.insertId,
+            total_price: total_price
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Order failed' });
+    }
+});
+
+
+// ==========================================
+// 7. DELETE ORDER (DELETE)
+// ==========================================
+app.delete('/orders/:id', verifyToken, async (req, res) => {
+    const order_id = req.params.id;
+    const customer_id = req.user.id;
+
+    try {
+        const [check] = await db.query('SELECT * FROM tbl_orders WHERE order_id = ? AND customer_id = ?', [order_id, customer_id]);
+        
+        if (check.length === 0) {
+            return res.status(404).json({ error: 'Order not found or you do not have permission' });
         }
-        res.json({ message: 'User deleted successfully' });
+
+        // หากต้องการลบรายละเอียดออเดอร์ (tbl_order_details) ก่อนด้วยต้องเพิ่มโค้ดที่นี่
+        
+        await db.query('DELETE FROM tbl_orders WHERE order_id = ?', [order_id]);
+        
+        res.json({ message: 'Order cancelled successfully' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Delete failed' });
     }
 });
 
-// Route 8: INNER JOIN 3 ตาราง (Users + Departments + Positions)
-app.get('/users-details', async (req, res) => {
+// ==========================================
+// 8. ORDER SUMMARY (READ AGGREGATE)
+// ==========================================
+app.get('/orders/summary', verifyToken, async (req, res) => {
+    const customer_id = req.user.id;
+
     try {
         const sql = `
             SELECT 
-                u.id, 
-                u.fullname, 
-                u.username, 
-                d.dept_name, 
-                p.position_name
-            FROM 
-                tbl_users AS u
-            INNER JOIN 
-                tbl_departments AS d ON u.department_id = d.id
-            INNER JOIN 
-                tbl_positions AS p ON u.position_id = p.id
+                c.first_name AS customer_name,
+                SUM(o.total_price) AS total_amount
+            FROM tbl_orders o
+            JOIN tbl_customers c ON o.customer_id = c.customer_id
+            WHERE o.customer_id = ?
+            GROUP BY c.customer_id
         `;
-
-        const [rows] = await db.query(sql);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ message: 'No data found matching the join criteria' });
-        }
-
-        res.json(rows);
-    } catch (err) {
-        console.error("Join Error:", err);
-        res.status(500).json({ error: 'Database join failed' });
-    }
-});
-
-// --- Route ที่เพิ่มใหม่ (เพื่อให้ครบ 10 ฟังก์ชัน) ---
-
-// Route 9: ดึงข้อมูลผู้ใช้ปัจจุบันที่ Login (Protected Route)
-// ต้องใช้ Middleware: verifyToken เพื่อตรวจสอบ JWT
-app.get('/protected-user', verifyToken, async (req, res) => {
-    try {
-        // req.user ถูกเพิ่มมาจาก verifyToken (มี user.id)
-        const [rows] = await db.query('SELECT id, firstname, fullname, lastname, username, status FROM tbl_users WHERE id = ?', [req.user.id]);
+        
+        const [rows] = await db.query(sql, [customer_id]);
         
         if (rows.length === 0) {
-            return res.status(404).json({ message: 'User profile not found' });
+            // คืนค่า 0 หากไม่มีออเดอร์
+            return res.json({ customer_name: 'Unknown', total_amount: 0 });
         }
-        
-        res.json(rows[0]);
+
+        res.json({
+            customer_name: rows[0].customer_name,
+            total_amount: rows[0].total_amount
+        });
     } catch (err) {
-        console.error("Protected user route failed:", err);
-        res.status(500).json({ error: 'Failed to retrieve user data' });
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
     }
 });
 
-// Route 10: ค้นหาผู้ใช้ตามชื่อเต็ม
-app.get('/users/search', async (req, res) => {
-    const { fullname } = req.query; // รับค่าจาก Query Parameter: /users/search?fullname=สมชาย
-    if (!fullname) {
-        return res.status(400).json({ error: 'Query parameter "fullname" is required' });
-    }
-    
-    try {
-        const searchTerm = `%${fullname}%`; // ใช้ % สำหรับ LIKE search
-        const [rows] = await db.query(
-            'SELECT id, firstname, fullname, lastname, username, status FROM tbl_users WHERE fullname LIKE ?',
-            [searchTerm]
-        );
-        
-        if (rows.length === 0) {
-            return res.status(404).json({ message: 'No users found matching the search criteria' });
-        }
-        
-        res.json(rows);
-    } catch (err) {
-        console.error("User search failed:", err);
-        res.status(500).json({ error: 'Database search failed' });
-    }
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Food API (Full CRUD) running on http://localhost:${PORT}`));
 
-// Route: ตัวอย่างการทำ Logout (ไม่นับเป็น Route หลักใน API แต่มีประโยชน์)
-app.post('/logout', (req, res) => {
-    // ในฝั่ง Server, เราไม่ต้องทำอะไรกับ Token เพราะ Token จะหมดอายุเอง
-    // การ "Logout" จริงๆ เกิดขึ้นที่ Client โดยการลบ Token ออกจาก Local Storage
-    res.json({ message: "Logged out" });
-});
-
-// ================= START SERVER =================
-// บรรทัดนี้ต้องอยู่ล่างสุดเสมอ
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-module.exports = app
+module.exports = app;
