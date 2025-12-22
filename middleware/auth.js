@@ -1,32 +1,36 @@
-// Middleware ตรวจสอบ JWT Token
 const jwt = require('jsonwebtoken');
+require('dotenv').config();
 
-// โหลดค่า Secret Key
-const SECRET_KEY = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'METjMXahPtaHtP5JmnGHzxL3gZYeDP23o';
 
-const verifyToken = (req, res, next) => {
-  // 1. อ่าน token จาก header ชื่อ Authorization
+function verifyToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // ตัดคำว่า "Bearer" ออก เอาแค่ตัว Token
+  const token = authHeader && authHeader.split(' ')[1];
 
-  // 2. ถ้าไม่มี token ส่งมา (หรือหาไม่เจอ) -> คืนค่า 401 Unauthorized
   if (!token) {
-    return res.status(401).json({ error: 'Access denied, token missing' });
+    return res.status(401).json({ 
+      success: false,
+      message: 'ไม่พบ Token กรุณาเข้าสู่ระบบ'
+    });
   }
 
-  try {
-    // 3. ตรวจสอบ token ด้วย jwt.verify()
-    const decoded = jwt.verify(token, SECRET_KEY);
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ 
+          success: false,
+          message: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+        });
+      }
+      return res.status(403).json({ 
+        success: false,
+        message: 'Token ไม่ถูกต้อง'
+      });
+    }
     
-    // ถ้าผ่าน: เก็บข้อมูล user ไว้ใน request เพื่อให้ API ถัดไปใช้ต่อ
-    req.user = decoded; 
-    
-    // 4. ไปยัง API ถัดไป
-    next(); 
-  } catch (err) {
-    // 5. ถ้า token ไม่ถูกต้อง หรือหมดอายุ -> คืนค่า 401 Unauthorized
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
+    req.user = decoded;
+    next();
+  });
+}
 
 module.exports = verifyToken;
