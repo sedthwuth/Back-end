@@ -1,28 +1,29 @@
 // ใน index.js
+
 require('dotenv').config();
 const express = require('express');
+// 💡 แก้ไข Swagger Import:
+const swaggerUi = require('swagger-ui-express'); // Import swagger-ui-express โดยตรง
+const { specs } = require("./swagger.js"); 
 
 const app = express();
 app.use(express.json());
 
-// Routes
-app.use("/api/users", require("./route/users"));
-app.use("/api/auth", require("./route/login"));
+// ... (Routes) ...
+app.use("/api/users", require("./routes/users.js"));
+app.use("/api/login", require("./routes/login.js"));
+
+// Middleware Swagger
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs)); 
+
+// 💡 1. EXPORT APP OBJECT: ส่ง Express App Object ออกไปเสมอ
+module.exports = app; 
 
 const PORT = process.env.PORT || 3000;
 
-// ✅ FIX 1: ให้ app.listen() รันเป็นคำสั่งสุดท้าย และ export app ก่อน
-module.exports = app; 
-
-// กำหนดตัวแปร server หลังจากการกำหนด app
-// *** สำคัญ: ถ้าคุณรัน Test, app.listen() จะถูกยกเลิก ไม่ต้องมีก็ได้ แต่ถ้ารัน server ปกติต้องมี ***
-// เพื่อให้ Test สามารถ import 'app' ได้โดยไม่มีปัญหา ReferenceError 
-// ควรย้าย app.listen ไปอยู่ในไฟล์ test หรือรันแค่เมื่อไฟล์ถูกเรียกโดยตรง
-// แต่ตามโค้ดเดิมของคุณ ให้ทำดังนี้:
-
-// (ตรวจสอบว่าใน index.js ของคุณเป็นแบบนี้)
-const server = app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
-
-module.exports.server = server;
+// 💡 2. เงื่อนไขการ LISTEN:
+// Server จะ listen ก็ต่อเมื่อไฟล์นี้ถูกรันโดยตรง (ไม่ถูก require) 
+// หรือเมื่อเราไม่ได้อยู่ในโหมด Test
+if (require.main === module || process.env.NODE_ENV === 'production') {
+    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+}   
