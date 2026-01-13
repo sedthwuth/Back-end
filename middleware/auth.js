@@ -1,36 +1,33 @@
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'METjMXahPtaHtP5JmnGHzxL3gZYeDP23o';
-
-function verifyToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ 
-      success: false,
-      message: 'ไม่พบ Token กรุณาเข้าสู่ระบบ'
-    });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({ 
-          success: false,
-          message: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่'
-        });
-      }
-      return res.status(403).json({ 
-        success: false,
-        message: 'Token ไม่ถูกต้อง'
-      });
-    }
+/**
+ * Middleware สำหรับตรวจสอบ JWT Token ใน Header (Authorization: Bearer <token>)
+ */
+const verifyToken = (req, res, next) => {
+    // ดึง token จาก Authorization header
+    const authHeader = req.headers['authorization'];
     
-    req.user = decoded;
-    next();
-  });
-}
+    // ตรวจสอบว่า Header มีรูปแบบ 'Bearer <token>' หรือไม่
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'Access denied. No token provided or token format is incorrect.' });
+    }
+
+    // ดึงเฉพาะส่วน token
+    const token = authHeader.split(' ')[1]; 
+    
+    try {
+        // ตรวจสอบและถอดรหัส token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_default_jwt_secret');
+        
+        // แนบข้อมูลผู้ใช้ที่ถอดรหัสแล้วเข้ากับ request object
+        req.user = decoded;
+        
+        // ไปยัง middleware/route ถัดไป
+        next();
+    } catch (ex) {
+        // Token ไม่ถูกต้อง, หมดอายุ, หรือมีปัญหา
+        return res.status(401).json({ message: 'Invalid token.' });
+    }
+};
 
 module.exports = verifyToken;

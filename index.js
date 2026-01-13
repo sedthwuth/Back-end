@@ -1,29 +1,36 @@
-// ใน index.js
-
-require('dotenv').config();
 const express = require('express');
-// 💡 แก้ไข Swagger Import:
-const swaggerUi = require('swagger-ui-express'); // Import swagger-ui-express โดยตรง
-const { specs } = require("./swagger.js"); 
+const cors = require('cors');
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const { swaggerUi, specs } = require('./swagger');
+
+// Routes
+const userRoutes = require('./Routes/users');
+const registerRoutes = require('./Routes/register');
+const loginRoutes = require('./Routes/login');
 
 const app = express();
+
+// middleware
+app.use(cors());
 app.use(express.json());
 
-// ... (Routes) ...
-app.use("/api/users", require("./routes/users.js"));
-app.use("/api/login", require("./routes/login.js"));
+// Swagger UI
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
-// Middleware Swagger
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs)); 
+// Routes
+app.use('/api/users', userRoutes);
+app.use('/api/register', registerRoutes);
+app.use('/api/login', loginRoutes);
 
-// 💡 1. EXPORT APP OBJECT: ส่ง Express App Object ออกไปเสมอ
-module.exports = app; 
+module.exports = app;
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
-// 💡 2. เงื่อนไขการ LISTEN:
-// Server จะ listen ก็ต่อเมื่อไฟล์นี้ถูกรันโดยตรง (ไม่ถูก require) 
-// หรือเมื่อเราไม่ได้อยู่ในโหมด Test
-if (require.main === module || process.env.NODE_ENV === 'production') {
-    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-}   
+if (process.env.NODE_ENV !== 'test') {
+    app.listen(PORT, () =>
+        console.log(`Server running on http://localhost:${PORT}`)
+    );
+}

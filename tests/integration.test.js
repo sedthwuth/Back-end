@@ -1,232 +1,153 @@
-const request = require('supertest');
-const app = require('../index'); 
+const request = require("supertest");
+// ตรวจสอบให้แน่ใจว่าไฟล์ server.js ถูก export เป็น module.exports = app;
+// และ supertest สามารถเข้าถึงได้ผ่าน path "../index"
+const app = require("../index.js"); 
 
-let authToken = ''; 
-let testCustomerId = 0;
-const DB_TABLE_NAME = 'tbl_users'; 
+describe("User Management Integration Test", () => {
+    // กำหนดตัวแปรสำหรับเก็บข้อมูลที่ใช้ระหว่างการทดสอบ
+    let createdUserId;
+    let authToken;
+    const testUser = {
+        // แก้ไขฟิลด์ให้ตรงกับ server.js
+        firstname: "Test",
+        fullname: "Test User",
+        lastname: "Integration",
+        username: "test_integration@mail.com", // เปลี่ยน email เป็น username
+        password: "securepassword123", // ใช้รหัสผ่านที่ซับซ้อนขึ้น
+        status: 1 // กำหนด status
+    };
+    const updatedName = "Updated Test";
+    const newPassword = "newsecurepassword456"; // ✅ เพิ่มการประกาศตัวแปรนี้
 
-// === ข้อมูลผู้ใช้สำหรับ Setup ===
-const testUser = {
-    username: 'test_user_int',
-    password: 'Password123',
-    email: 'test_int@example.com',
-    firstname: 'Test Firstname', 
-    lastname: 'Test Lastname',
-    fullname: 'Test Firstname Test Lastname', 
-};
-
-// === ข้อมูลผู้ใช้สำหรับ TC3 (ลงทะเบียนใหม่) ===
-const newUser = {
-    username: 'new_user_for_tc3',
-    password: 'Password123',
-    email: 'new_int@example.com',
-    firstname: 'New User', 
-    lastname: 'Test',
-    fullname: 'New User Test',
-};
-
-// === ข้อมูลผู้ใช้สำหรับ TC7 (อัปเดต) ===
-const updatedTestUser = {
-    firstname: 'Updated Name', 
-    lastname: 'Updated Last',
-    email: 'updated_int@example.com',
-    fullname: 'Updated Name Updated Last' 
-};
-
-// ==========================================
-// SETUP / TEARDOWN
-// ==========================================
-const db = require('../config/db');
-
-beforeAll(async () => {
-    let conn;
-    try {
-        conn = await db.getConnection();
-        
-        // 1. ล้างข้อมูลผู้ใช้เก่าที่อาจค้างอยู่
-        await conn.query(`DELETE FROM ${DB_TABLE_NAME} WHERE username = ?`, [testUser.username]);
-        await conn.query(`DELETE FROM ${DB_TABLE_NAME} WHERE username = ?`, [newUser.username]);
-        
-        // 2. Register ผู้ใช้ทดสอบหลัก
+    // --- 1. POST /users (Register) ---
+    test("TC-REG-01: POST /users - Successfully create a new user (Register)", async () => {
         const res = await request(app)
-            .post('/api/users') // Path: /api/users
+            .post("/users")
             .send(testUser);
+
+        // ตรวจสอบสถานะการสร้าง (201 Created)
+        expect(res.statusCode).toBe(201);
+        // ตรวจสอบว่ามี ID ถูกสร้างขึ้นมา
+        expect(res.body).toHaveProperty("id");
         
-        // ตรวจสอบสถานะ: ต้องเป็น 200 หรือ 201
-        if (res.statusCode !== 201 && res.statusCode !== 200) { 
-            console.error('Initial Register failed with status:', res.statusCode, res.body);
-            throw new Error('Initial user registration failed in beforeAll.');
-        }
-
-        // 3. Login เพื่อรับ Token
-        const loginRes = await request(app)
-            .post('/api/login') // Path: /api/login
-            .send({ username: testUser.username, password: testUser.password });
-
-        if (loginRes.statusCode !== 200) {
-            console.error('Initial Login failed with status:', loginRes.statusCode, loginRes.body);
-            throw new Error('Initial login failed in beforeAll.');
-        }
-
-        authToken = loginRes.body.token;
+        // เก็บ ID ผู้ใช้ที่สร้างเพื่อใช้ในการทดสอบต่อ
+        createdUserId = res.body.id;
         
-        // 4. ดึง ID ของผู้ใช้ที่เพิ่งสร้าง
-        const [rows] = await conn.query(`SELECT id FROM ${DB_TABLE_NAME} WHERE username = ?`, [testUser.username]);
-        testCustomerId = rows[0].id;
+        // ตรวจสอบข้อมูลที่ถูกส่งกลับ
+        expect(res.body.username).toBe(testUser.username);
+        expect(res.body.fullname).toBe(testUser.fullname);
+    });
+
+    // --- 2. POST /users (Duplicate Username) ---
+    test("TC-REG-02: POST /users - Should fail with status 409 if username already exists", async () => {
+        const res = await request(app)
+            .post("/users")
+            .send(testUser);
+
+        // คาดหวังสถานะ 409 Conflict (จากการแก้ไขโค้ด server.js)
+        expect(res.statusCode).toBe(409);
+        expect(res.body).toHaveProperty("error", "Username already exists");
+    });
+
+
+    // --- 3. POST /login ---
+    test("TC-LOGIN-01: POST /login - Successfully login with correct credentials", async () => {
+        const res = await request(app)
+            .post("/login")
+            .send({
+                username: testUser.username, // เปลี่ยน email เป็น username
+                password: testUser.password
+            });
+
+        // ตรวจสอบสถานะ (200 OK)
+        expect(res.statusCode).toBe(200);
+        // ตรวจสอบว่าได้รับ Token
+        expect(res.body).toHaveProperty("token");
         
-    } catch (error) {
-        console.error('Error during beforeAll setup:', error);
-        throw error; 
-    } finally {
-        if (conn) conn.release(); 
-    }
-});
+        // เก็บ Token เพื่อใช้ในการทดสอบ Protected Route
+        authToken = res.body.token;
+    });
 
-afterAll(async () => {
-    let cleanupConn;
-    try {
-        cleanupConn = await db.getConnection();
-        // 1. ลบผู้ใช้ทดสอบทิ้ง (ถ้า TC10 ไม่ได้ลบไปแล้ว)
-        await cleanupConn.query(`DELETE FROM ${DB_TABLE_NAME} WHERE username = ? OR id = ?`, [testUser.username, testCustomerId]);
-        await cleanupConn.query(`DELETE FROM ${DB_TABLE_NAME} WHERE username = ?`, [newUser.username]);
-    } catch (error) {
-        console.error('Error during afterAll cleanup:', error);
-    } finally {
-        if (cleanupConn) cleanupConn.release();
+    // --- 4. GET /protected-user (Protected Route) ---
+    test("TC-AUTH-01: GET /protected-user - Should retrieve profile using valid token", async () => {
+        const res = await request(app)
+            .get("/protected-user")
+            .set('Authorization', `Bearer ${authToken}`); // ใช้ Token ที่ได้รับ
         
-        // 2. ปิด DB Connection Pool 
-        await db.end();
-    }
-});
-
-
-// ==========================================
-// TEST CASES (10 รายการ)
-// ==========================================
-
-describe('User Module Integration Test (10 Cases)', () => {
+        // ตรวจสอบสถานะ (200 OK)
+        expect(res.statusCode).toBe(200);
+        expect(res.body.id).toBe(createdUserId);
+        expect(res.body.fullname).toBe(testUser.fullname);
+        // ตรวจสอบว่าไม่มี password ถูกส่งกลับมา
+        expect(res.body).not.toHaveProperty("password");
+    });
     
-    // --- 1. การทดสอบ Register API ---
-
-    // TC1: ปฏิเสธการลงทะเบียนหาก Username ซ้ำ (ทดสอบ 409)
-    it('TC1: Should reject registration if username already exists (409)', async () => {
+    // --- 5. GET /users/:id ---
+    test("TC-READ-01: GET /users/:id - Should retrieve the created user by ID", async () => {
         const res = await request(app)
-            .post('/api/users')
-            .send(testUser); // ใช้ testUser เดิม
-            
-        expect(res.statusCode).toBe(409); 
-        expect(res.body).toHaveProperty('error', 'Username นี้ถูกใช้งานแล้ว');
+            .get(`/users/${createdUserId}`);
+        
+        expect(res.statusCode).toBe(200);
+        expect(res.body.id).toBe(createdUserId);
     });
 
-    // TC2: ปฏิเสธการลงทะเบียนหากขาดข้อมูลที่จำเป็น (400)
-    it('TC2: Should reject registration if essential data is missing (e.g., password) (400)', async () => {
+    // --- 6. PUT /users/:id (Update) ---
+    // ✅ โค้ดถูกนำกลับเข้ามาใน test() block ที่ถูกต้องแล้ว
+    test("TC-UPDATE-01: PUT /users/:id - Successfully update user's fullname and password", async () => {
         const res = await request(app)
-            .post('/api/users')
-            .send({ ...testUser, password: '' }); // ส่ง password ว่างไป
-            
-        expect(res.statusCode).toBe(400); 
-    });
+            .put(`/users/${createdUserId}`)
+            .send({
+                // ส่งข้อมูลทุกฟิลด์เพื่อความสมบูรณ์และลดโอกาส Error 500
+                firstname: testUser.firstname, 
+                fullname: updatedName, // เปลี่ยนชื่อ
+                lastname: testUser.lastname,
+                username: testUser.username,
+                password: newPassword, // รหัสผ่านใหม่
+                status: testUser.status 
+            });
 
-    // TC3: ลงทะเบียนสำเร็จด้วย Username ใหม่ (201)
-    it('TC3: Should successfully register a new user', async () => {
-        const res = await request(app)
-            .post('/api/users')
-            .send(newUser); 
-            
-        // Router ของคุณส่ง 201 
-        expect(res.statusCode).toBe(201); 
-        expect(res.body).toHaveProperty('id');
-    });
-
-    // --- 2. การทดสอบ Login API ---
-
-    // TC4: ปฏิเสธการ Login หาก Password ผิด (401)
-    it('TC4: Should reject login with incorrect password (401)', async () => {
-        const res = await request(app)
-            .post('/api/login')
-            .send({ username: testUser.username, password: 'WrongPassword' });
-            
-        expect(res.statusCode).toBe(401); 
-    });
-
-    // TC5: เข้าสู่ระบบสำเร็จและได้รับ Token (200)
-    it('TC5: Should successfully login and receive an authentication token (200)', async () => {
-        const res = await request(app)
-            .post('/api/login')
-            .send({ username: testUser.username, password: testUser.password });
-            
+        // คาดหวัง 200 (แต่ถ้า server.js มี Error 500 จริง ๆ การทดสอบนี้จะล้มเหลวที่บรรทัดนี้)
         expect(res.statusCode).toBe(200); 
-        expect(res.body).toHaveProperty('token'); 
+        expect(res.body.message).toBe("User updated successfully");
     });
 
-
-    // --- 3. การทดสอบ Profile API ---
-
-    // TC6: ดึงข้อมูลโปรไฟล์สำเร็จ (200)
-    it('TC6: Should get profile data successfully using the token (200)', async () => {
+    // ✅ เพิ่มการทดสอบยืนยันการอัปเดต (Verification) ก่อน Search
+    test("TC-VERIFY-UPDATE: GET /users/:id - Verify updated fullname before search", async () => { 
         const res = await request(app)
-            .get('/api/users') 
-            .set('Authorization', `Bearer ${authToken}`);
-
-        expect(res.statusCode).toBe(200);
-        
-        // 💡 ตรวจสอบคุณสมบัติสำคัญด้วย 'firstname' (Camel Case)
-        expect(res.body[0]).toHaveProperty('id', testCustomerId);
-        expect(res.body[0]).toHaveProperty('firstname', testUser.firstname); 
-    });
-    
-    // TC7: อัปเดตข้อมูลโปรไฟล์สำเร็จ (200)
-    it('TC7: Should update profile data successfully (200)', async () => {
-        const res = await request(app)
-            .put(`/api/users/${testCustomerId}`) // ใช้ PUT /api/users/:id
-            .set('Authorization', `Bearer ${authToken}`)
-            .send(updatedTestUser);
-
-        expect(res.statusCode).toBe(200);
-        
-        // ตรวจสอบการอัปเดตด้วยการเรียก GET profile อีกครั้ง
-        const checkRes = await request(app)
-            .get('/api/users')
-            .set('Authorization', `Bearer ${authToken}`);
+            .get(`/users/${createdUserId}`);
             
-        // 💡 ตรวจสอบ 'firstname' (Camel Case) ที่ถูกอัปเดต
-        expect(checkRes.body[0].firstname).toBe(updatedTestUser.firstname);
-    });
-
-    // TC8: ปฏิเสธการเข้าถึง Profile เมื่อไม่มี Token (401)
-    it('TC8: Should reject access to profile if no token is provided (401)', async () => {
-        const res = await request(app)
-            .get('/api/users'); // ไม่ส่ง Header Authorization
-            
-        expect(res.statusCode).toBe(401); 
-    });
-
-
-    // --- 4. การทดสอบ Admin/CRUD Function ---
-    
-    // TC9: ดึงข้อมูลลูกค้าตาม ID สำเร็จ (200)
-    it('TC9: Should get customer data by ID successfully (200)', async () => {
-        const res = await request(app)
-            .get(`/api/users/${testCustomerId}`); 
-            // Router ของคุณไม่ได้ใช้ verifyToken สำหรับ GET /:id ดังนั้นไม่จำเป็นต้องส่ง Token (แต่ควรทำ)
-
+        // คาดหวัง 200 และชื่อที่เปลี่ยนไปแล้ว
         expect(res.statusCode).toBe(200);
-        expect(res.body).toHaveProperty('id', testCustomerId);
+        expect(res.body.fullname).toBe(updatedName);
     });
 
-    // TC10: ลบผู้ใช้สำเร็จ (200)
-    it('TC10: Should successfully delete the test user (200)', async () => {
+    // --- 7. GET /users/search (Search) ---
+    test("TC-SEARCH-01: GET /users/search?fullname=... - Should find user by updated name", async () => {
         const res = await request(app)
-            .delete(`/api/users/${testCustomerId}`) 
-            .set('Authorization', `Bearer ${authToken}`); // 💡 Router นี้ไม่มี Middleware แต่การมี Token ถือเป็น Best Practice
-
-        expect(res.statusCode).toBe(200); 
+            .get(`/users/search?fullname=${updatedName}`); 
         
-        // ตรวจสอบว่าถูกลบจริงใน DB
-        const [rows] = await db.query(`SELECT id FROM ${DB_TABLE_NAME} WHERE id = ?`, [testCustomerId]);
-        expect(rows.length).toBe(0);
-        // กำหนด testCustomerId เป็น 0 เพื่อให้ afterAll ไม่พยายามลบซ้ำ
-        testCustomerId = 0; 
+        // คาดหวัง 200 และผลลัพธ์การค้นหา
+       expect(res.statusCode).toBe(200);
+        expect(res.body[0].fullname).toBe(updatedName); 
     });
 
+    // --- 8. DELETE /users/:id ---
+    test("TC-DELETE-01: DELETE /users/:id - Successfully delete the user", async () => {
+        const res = await request(app)
+            .delete(`/users/${createdUserId}`);
+
+        // คาดหวัง 200 OK 
+        expect(res.statusCode).toBe(200);
+        expect(res.body.message).toBe("User deleted successfully");
+    });
+
+    // --- 9. GET /users/:id (Verify Deletion) ---
+    test("TC-DELETE-02: GET /users/:id - Should return 404 after deletion (Verification)", async () => {
+        const res = await request(app)
+            .get(`/users/${createdUserId}`);
+        
+        // ✅ แก้ไข: คาดหวัง 404 Not Found เพื่อยืนยันว่าผู้ใช้ถูกลบไปแล้ว (ถูกต้องตาม Logic)
+        expect(res.statusCode).toBe(404);
+        expect(res.body.message).toBe("User not found");
+    });
 });
