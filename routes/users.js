@@ -1,124 +1,166 @@
 const express = require("express");
-const router = express.Router(); // ✅ แก้ไข Reference Error: ใช้ 'router'
+const router = express.Router();
 const db = require("../config/db");
-const bcrypt = require('bcrypt');
-const verifyToken = require('../middleware/auth'); 
+const bcrypt = require("bcrypt");
+const verifyToken = require("../middleware/auth");
 
 /**
- * @swagger
- * tags:
- * - name: Users
- * description: User management system
- */ 
-
-// GET all users (Requires Token)
-router.get('/', verifyToken, async (req, res) => {
+ * @openapi
+ * /api/users:
+ *   get:
+ *     tags: [Users]
+ *     summary: ดึงรายชื่อผู้ใช้ทั้งหมด
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get("/", verifyToken, async (req, res) => {
   try {
-    // ✅ เลือกเฉพาะ field ที่มีใน DB (ตัด addrss, email ออก)
-    const [rows] = await db.query('SELECT id, username, firstname, fullname, lastname, status FROM tbl_users');
+    const [rows] = await db.query(
+      "SELECT users_id, username, email, role FROM tbl_users"
+    );
     res.json(rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Query failed' });
+    res.status(500).json({ error: "Query failed" });
   }
 });
 
-// GET user by id
-router.get('/:id', async (req, res) => {
+/**
+ * @openapi
+ * /api/users/{id}:
+ *   get:
+ *     tags: [Users]
+ *     summary: ดึงผู้ใช้ตาม ID
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: OK
+ *       404:
+ *         description: User not found
+ */
+router.get("/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  try {
-    // ✅ เลือกเฉพาะ field ที่มีใน DB
-    const [rows] = await db.query('SELECT id, username, firstname, fullname, lastname FROM tbl_users WHERE id = ?', [id]);
-    if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
-    res.json(rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Query failed' });
+  const [rows] = await db.query(
+    "SELECT users_id, username, email, role FROM tbl_users WHERE users_id = ?",
+    [id]
+  );
+
+  if (rows.length === 0) {
+    return res.status(404).json({ message: "User not found" });
   }
+
+  res.json(rows[0]);
 });
 
-// POST: Register New User
-router.post('/', async (req, res) => { 
-    // ✅ ตัด email ออก
-    const { username, password, firstname, fullname, lastname } = req.body; 
+/**
+ * @openapi
+ * /api/users:
+ *   post:
+ *     tags: [Users]
+ *     summary: เพิ่มผู้ใช้ใหม่
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ */
+router.post("/", async (req, res) => {
+  const { username, email, password, role } = req.body;
 
-    if (!username || !password || !firstname) {
-        return res.status(400).json({ error: 'Missing required fields' });
-    }
+  const hashedPassword = await bcrypt.hash(password, 10);
 
-    let connection;
-    try {
-        connection = await db.getConnection();
+  await db.query(
+    "INSERT INTO tbl_users (username, email, password, role) VALUES (?, ?, ?, ?)",
+    [username, email, hashedPassword, role || "user"]
+  );
 
-        // 1. Check duplicate
-        const [existingUser] = await connection.query('SELECT id FROM tbl_users WHERE username = ?', [username]);
-        if (existingUser.length > 0) {
-            return res.status(409).json({ error: 'Username already exists' }); 
-        }
-
-        // 2. Hash Password
-        const hashedPassword = await bcrypt.hash(password, 10);
-        
-        // 3. Insert (✅ ตัด email ออกจาก Query)
-        const [result] = await connection.query(
-            'INSERT INTO tbl_users (username, password, firstname, fullname, lastname) VALUES (?, ?, ?, ?, ?)',
-            [username, hashedPassword, firstname, fullname, lastname]
-        );
-
-        res.status(201).json({ id: result.insertId, message: 'User created' });
-
-    } catch (error) {
-        console.error('Error registering user:', error);
-        res.status(500).json({ error: 'Registration failed' });
-    } finally {
-        if (connection) connection.release();
-    }
+  res.status(201).json({ message: "User created" });
 });
 
-// PUT: Update User
-router.put('/:id', async (req, res) => {
+/**
+ * @openapi
+ * /api/users/{id}:
+ *   put:
+ *     tags: [Users]
+ *     summary: แก้ไขข้อมูลผู้ใช้
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ */
+router.put("/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  // ✅ ตัด email ออก
-  const { firstname, fullname, lastname, password } = req.body;
+  const { username, email, password, role } = req.body;
 
-  try {
-    // ✅ ตัด email ออกจาก Query
-    let query = 'UPDATE tbl_users SET firstname = ?, fullname = ?, lastname = ?';
-    const params = [firstname, fullname, lastname]; 
+  let query = "UPDATE tbl_users SET username = ?, email = ?, role = ?";
+  const params = [username, email, role];
 
-    if (password) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      query += ', password = ?';
-      params.push(hashedPassword);
-    }
-
-    query += ' WHERE id = ?';
-    params.push(id);
-
-    const [result] = await db.query(query, params);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    res.json({ message: 'User updated successfully' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Update failed' });
+  if (password) {
+    const hashed = await bcrypt.hash(password, 10);
+    query += ", password = ?";
+    params.push(hashed);
   }
+
+  query += " WHERE users_id = ?";
+  params.push(id);
+
+  const [result] = await db.query(query, params);
+
+  if (result.affectedRows === 0) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  res.json({ message: "User updated" });
 });
 
-// DELETE user
-router.delete('/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const [result] = await db.query('DELETE FROM tbl_users WHERE id = ?', [id]);
-        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
-        res.json({ message: 'User deleted successfully' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Delete failed' });
-    }
+/**
+ * @openapi
+ * /api/users/{id}:
+ *   delete:
+ *     tags: [Users]
+ *     summary: ลบผู้ใช้
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ */
+router.delete("/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+
+  const [result] = await db.query(
+    "DELETE FROM tbl_users WHERE users_id = ?",
+    [id]
+  );
+
+  if (result.affectedRows === 0) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  res.json({ message: "User deleted" });
 });
 
 module.exports = router;

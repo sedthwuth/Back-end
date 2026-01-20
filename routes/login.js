@@ -1,18 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
-
-const JWT_SECRET = process.env.JWT_SECRET || 'METjMXahPtaHtP5JmnGHzxL3gZYeDP23o';
 
 /**
- * @swagger
+ * @openapi
  * /api/login:
  *   post:
- *     summary: เข้าสู่ระบบ (Login)
- *     tags: [Auth]
+ *     tags:
+ *       - Auth
+ *     summary: Login เข้าสู่ระบบ
  *     requestBody:
  *       required: true
  *       content:
@@ -25,69 +23,58 @@ const JWT_SECRET = process.env.JWT_SECRET || 'METjMXahPtaHtP5JmnGHzxL3gZYeDP23o'
  *             properties:
  *               username:
  *                 type: string
+ *                 example: admin_test
  *               password:
  *                 type: string
+ *                 example: admin123
  *     responses:
  *       200:
- *         description: Login สำเร็จ
+ *         description: Login success
  *       401:
- *         description: Username หรือ Password ไม่ถูกต้อง
+ *         description: Invalid credentials
  */
 router.post('/', async (req, res) => {
   const { username, password } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'กรุณากรอก username และ password'
-    });
-  }
-
   try {
-    const [users] = await db.query(
+    const [rows] = await db.query(
       'SELECT * FROM tbl_users WHERE username = ?',
       [username]
     );
 
-    if (users.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: 'Username หรือ Password ไม่ถูกต้อง'
-      });
+    if (rows.length === 0) {
+      return res.status(401).json({ message: 'ไม่พบชื่อผู้ใช้งานนี้ในระบบ' });
     }
 
-    const user = users[0];
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const user = rows[0];
 
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Username หรือ Password ไม่ถูกต้อง'
-      });
+    const isMatch = await bcrypt.compare(password, user.password);
+    console.log("INPUT PASSWORD:", password);
+    console.log("DB HASH:", user.password);
+    console.log("MATCH RESULT:", isMatch);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: 'รหัสผ่านไม่ถูกต้อง' });
     }
 
     const token = jwt.sign(
-      { users_id: user.users_id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '7d' }
+      { id: user.users_id, username: user.username, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '3h' }
     );
 
     res.json({
-      success: true,
       message: 'เข้าสู่ระบบสำเร็จ',
       token,
-      data: {
-        users_id: user.users_id,
+      user: {
         username: user.username,
-        email: user.email
-      }
+        role: user.role,
+      },
     });
 
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ'
-    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
